@@ -62,51 +62,60 @@ conf_thresh   = 0.25
 nms_thresh    = 0.4
 iou_thresh    = 0.5
 
-if not os.path.exists(backupdir):
-    os.mkdir(backupdir)
-    
-###############
-torch.manual_seed(seed)
-if use_cuda:
-    os.environ['CUDA_VISIBLE_DEVICES'] = gpus
-    torch.cuda.manual_seed(seed)
+# Set to only evaluate
+evaluate 	  = False
 
-model       = Darknet(cfgfile)
-region_loss = model.loss
 
-model.load_weights(weightfile)
-model.print_network()
+def init():
+    if not os.path.exists(backupdir):
+        os.mkdir(backupdir)
 
-region_loss.seen  = model.seen
-processed_batches = model.seen/batch_size
+    ###############
+    torch.manual_seed(seed)
+    if use_cuda:
+        os.environ['CUDA_VISIBLE_DEVICES'] = gpus
+        torch.cuda.manual_seed(seed)
 
-init_width        = model.width
-init_height       = model.height
-init_epoch        = model.seen/nsamples 
+    model = Darknet(cfgfile)
+    region_loss = model.loss
 
-kwargs = {'num_workers': num_workers, 'pin_memory': True} if use_cuda else {}
-test_loader = torch.utils.data.DataLoader(
-    dataset.listDataset(testlist, shape=(init_width, init_height),
-                   shuffle=False,
-                   transform=transforms.Compose([
-                       transforms.ToTensor(),
-                   ]), train=False),
-    batch_size=batch_size, shuffle=False, **kwargs)
+    model.load_weights(weightfile)
+    model.print_network()
 
-if use_cuda:
-    if ngpus > 1:
-        model = torch.nn.DataParallel(model).cuda()
-    else:
-        model = model.cuda()
+    region_loss.seen = model.seen
+    processed_batches = model.seen/batch_size
 
-params_dict = dict(model.named_parameters())
-params = []
-for key, value in params_dict.items():
-    if key.find('.bn') >= 0 or key.find('.bias') >= 0:
-        params += [{'params': [value], 'weight_decay': 0.0}]
-    else:
-        params += [{'params': [value], 'weight_decay': decay*batch_size}]
-optimizer = optim.SGD(model.parameters(), lr=learning_rate/batch_size, momentum=momentum, dampening=0, weight_decay=decay*batch_size)
+    init_width = model.width
+    init_height = model.height
+    init_epoch = model.seen/nsamples
+
+    kwargs = {'num_workers': num_workers, 'pin_memory': True} if use_cuda else {}
+    test_loader = torch.utils.data.DataLoader(
+        dataset.listDataset(testlist, shape=(init_width, init_height),
+                            shuffle=False,
+                            transform=transforms.Compose([
+                                transforms.ToTensor(),
+                            ]), train=False),
+        batch_size=batch_size, shuffle=False, **kwargs)
+
+    if use_cuda:
+        if ngpus > 1:
+            model = torch.nn.DataParallel(model).cuda()
+        else:
+            model = model.cuda()
+
+    params_dict = dict(model.named_parameters())
+    params = []
+    for key, value in params_dict.items():
+        if key.find('.bn') >= 0 or key.find('.bias') >= 0:
+            params += [{'params': [value], 'weight_decay': 0.0}]
+        else:
+            params += [{'params': [value], 'weight_decay': decay * batch_size}]
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate/batch_size, momentum=momentum, dampening=0,
+                          weight_decay=decay * batch_size)
+
+    return model, region_loss, processed_batches, init_width, init_height, init_epoch, kwargs, test_loader, optimizer
+
 
 def adjust_learning_rate(optimizer, batch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
@@ -195,7 +204,7 @@ def train(epoch):
     print('')
     t1 = time.time()
     logging('training with %f samples/s' % (len(train_loader.dataset)/(t1-t0)))
-    if (epoch+1) % save_interval == 0:
+    if (epoch+1) % save_interval == 0 or (epoch+1) == max_epochs:
         logging('save weights to %s/%06d.weights' % (backupdir, epoch+1))
         cur_model.seen = (epoch + 1) * len(train_loader.dataset)
         cur_model.save_weights('%s/%06d.weights' % (backupdir, epoch+1))
@@ -256,11 +265,14 @@ def test(epoch):
     fscore = 2.0*precision*recall/(precision+recall+eps)
     logging("precision: %f, recall: %f, fscore: %f" % (precision, recall, fscore))
 
-evaluate = False
-if evaluate:
-    logging('evaluating ...')
-    test(0)
-else:
-    for epoch in range(init_epoch, max_epochs): 
-        train(epoch)
-        test(epoch)
+
+if __name__ == '__main__':
+    model, region_loss, processed_batches, init_width, init_height, init_epoch, kwargs, test_loader, optimizer = init()
+
+    if evaluate:
+        logging('evaluating ...')
+        test(0)
+    else:
+        for epoch in range(init_epoch, max_epochs):
+            train(epoch)
+            test(epoch)
