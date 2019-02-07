@@ -111,7 +111,7 @@ def convert2cpu_long(gpu_matrix):
     return torch.LongTensor(gpu_matrix.size()).copy_(gpu_matrix)
 
 def get_region_boxes(output, conf_thresh, num_classes, anchors, num_anchors, only_objectness=1, validation=False):
-    anchor_step = len(anchors)/num_anchors
+    anchor_step = len(anchors)//num_anchors
     if output.dim() == 3:
         output = output.unsqueeze(0)
     batch = output.size(0)
@@ -277,7 +277,7 @@ def read_truths(lab_path):
         return np.array([])
     if os.path.getsize(lab_path):
         truths = np.loadtxt(lab_path)
-        truths = truths.reshape(truths.size/5, 5) # to avoid single truth problem
+        truths = truths.reshape(truths.size//5, 5) # to avoid single truth problem
         return truths
     else:
         return np.array([])
@@ -393,7 +393,7 @@ def file_lines(thefilepath):
         buffer = thefile.read(8192*1024)
         if not buffer:
             break
-        count += buffer.count('\n')
+        count += buffer.count(b'\n')
     thefile.close( )
     return count
 
