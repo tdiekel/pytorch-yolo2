@@ -1,3 +1,5 @@
+# Changed to work with Python 3.6, Torch 1.0.1 and Windows
+
 ### pytorch-yolo2
 Convert https://pjreddie.com/darknet/yolo/ into pytorch. This repository is trying to achieve the following goals.
 - [x] implement RegionLoss, MaxPoolStride1, Reorg, GolbalAvgPool2d
