@@ -221,8 +221,11 @@ def test(epoch):
     for batch_idx, (data, target) in enumerate(test_loader):
         if use_cuda:
             data = data.cuda()
-        data = Variable(data, volatile=True)
-        output = model(data).data
+
+        with torch.no_grad():
+            data = Variable(data)
+            output = model(data).data
+
         all_boxes = get_region_boxes(output, conf_thresh, num_classes, anchors, num_anchors)
         for i in range(output.size(0)):
             boxes = all_boxes[i]
@@ -245,7 +248,7 @@ def test(epoch):
                     if iou > best_iou:
                         best_j = j
                         best_iou = iou
-                if best_iou > iou_thresh and boxes[best_j][6] == box_gt[6]:
+                if best_iou > iou_thresh and (boxes[best_j][6]).float() == box_gt[6]:
                     correct = correct+1
 
     precision = 1.0*correct/(proposals+eps)

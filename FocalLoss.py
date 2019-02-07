@@ -28,7 +28,7 @@ class FocalLoss(nn.Module):
                                 instead summed for each minibatch.
 
     """
-    def __init__(self, class_num, alpha=None, gamma=2, size_average=True):
+    def __init__(self, class_num, alpha=None, gamma=2, reduction='mean'):
         super(FocalLoss, self).__init__()
         if alpha is None:
             self.alpha = Variable(torch.ones(class_num, 1))
@@ -39,7 +39,7 @@ class FocalLoss(nn.Module):
                 self.alpha = Variable(alpha)
         self.gamma = gamma
         self.class_num = class_num
-        self.size_average = size_average
+        self.reduction = reduction
 
     def forward(self, inputs, targets):
         N = inputs.size(0)
@@ -69,7 +69,7 @@ class FocalLoss(nn.Module):
         #print(batch_loss)
 
         
-        if self.size_average:
+        if self.reduction == 'mean':
             loss = batch_loss.mean()
         else:
             loss = batch_loss.sum()

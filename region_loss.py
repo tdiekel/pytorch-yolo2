@@ -35,7 +35,7 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, nH, nW,
             gh = target[b][t*5+4]*nH
             cur_gt_boxes = torch.FloatTensor([gx,gy,gw,gh]).repeat(nAnchors,1).t()
             cur_ious = torch.max(cur_ious, bbox_ious(cur_pred_boxes, cur_gt_boxes, x1y1x2y2=False))
-        conf_mask[b][cur_ious>sil_thresh] = 0
+        conf_mask[b][torch.reshape(cur_ious, (nA, nH, nW)) > sil_thresh] = 0
     if seen < 12800:
        if anchor_step == 4:
            tx = torch.FloatTensor(anchors).view(nA, anchor_step).index_select(1, torch.LongTensor([2])).view(1,nA,1,1).repeat(nB,1,nH,nW)
@@ -91,7 +91,7 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, nH, nW,
             ty[b][best_n][gj][gi] = target[b][t*5+2] * nH - gj
             tw[b][best_n][gj][gi] = math.log(gw/anchors[anchor_step*best_n])
             th[b][best_n][gj][gi] = math.log(gh/anchors[anchor_step*best_n+1])
-            iou = bbox_iou(gt_box, pred_box, x1y1x2y2=False) # best_iou
+            iou = bbox_iou(gt_box, pred_box.double(), x1y1x2y2=False) # best_iou
             tconf[b][best_n][gj][gi] = iou
             tcls[b][best_n][gj][gi] = target[b][t*5]
             if iou > 0.5:
@@ -123,11 +123,11 @@ class RegionLoss(nn.Module):
         nW = output.data.size(3)
 
         output   = output.view(nB, nA, (5+nC), nH, nW)
-        x    = F.sigmoid(output.index_select(2, Variable(torch.cuda.LongTensor([0]))).view(nB, nA, nH, nW))
-        y    = F.sigmoid(output.index_select(2, Variable(torch.cuda.LongTensor([1]))).view(nB, nA, nH, nW))
+        x    = torch.sigmoid(output.index_select(2, Variable(torch.cuda.LongTensor([0]))).view(nB, nA, nH, nW))
+        y    = torch.sigmoid(output.index_select(2, Variable(torch.cuda.LongTensor([1]))).view(nB, nA, nH, nW))
         w    = output.index_select(2, Variable(torch.cuda.LongTensor([2]))).view(nB, nA, nH, nW)
         h    = output.index_select(2, Variable(torch.cuda.LongTensor([3]))).view(nB, nA, nH, nW)
-        conf = F.sigmoid(output.index_select(2, Variable(torch.cuda.LongTensor([4]))).view(nB, nA, nH, nW))
+        conf = torch.sigmoid(output.index_select(2, Variable(torch.cuda.LongTensor([4]))).view(nB, nA, nH, nW))
         cls  = output.index_select(2, Variable(torch.linspace(5,5+nC-1,nC).long().cuda()))
         cls  = cls.view(nB*nA, nC, nH*nW).transpose(1,2).contiguous().view(nB*nA*nH*nW, nC)
         t1 = time.time()
@@ -139,24 +139,24 @@ class RegionLoss(nn.Module):
         anchor_h = torch.Tensor(self.anchors).view(nA, self.anchor_step).index_select(1, torch.LongTensor([1])).cuda()
         anchor_w = anchor_w.repeat(nB, 1).repeat(1, 1, nH*nW).view(nB*nA*nH*nW)
         anchor_h = anchor_h.repeat(nB, 1).repeat(1, 1, nH*nW).view(nB*nA*nH*nW)
-        pred_boxes[0] = x.data + grid_x
-        pred_boxes[1] = y.data + grid_y
-        pred_boxes[2] = torch.exp(w.data) * anchor_w
-        pred_boxes[3] = torch.exp(h.data) * anchor_h
+        pred_boxes[0] = torch.reshape(x.data,(1, nB * nA * nH * nW)) + grid_x
+        pred_boxes[1] = torch.reshape(y.data,(1, nB * nA * nH * nW)) + grid_y
+        pred_boxes[2] = torch.reshape(torch.exp(w.data),(1, nB * nA * nH * nW)) * anchor_w
+        pred_boxes[3] = torch.reshape(torch.exp(h.data),(1, nB * nA * nH * nW)) * anchor_h
         pred_boxes = convert2cpu(pred_boxes.transpose(0,1).contiguous().view(-1,4))
         t2 = time.time()
 
         nGT, nCorrect, coord_mask, conf_mask, cls_mask, tx, ty, tw, th, tconf,tcls = build_targets(pred_boxes, target.data, self.anchors, nA, nC, \
                                                                nH, nW, self.noobject_scale, self.object_scale, self.thresh, self.seen)
         cls_mask = (cls_mask == 1)
-        nProposals = int((conf > 0.25).sum().data[0])
+        nProposals = int((conf > 0.25).sum().data.item())
 
         tx    = Variable(tx.cuda())
         ty    = Variable(ty.cuda())
         tw    = Variable(tw.cuda())
         th    = Variable(th.cuda())
         tconf = Variable(tconf.cuda())
-        tcls  = Variable(tcls.view(-1)[cls_mask].long().cuda())
+        tcls  = Variable(tcls.view(-1)[cls_mask.view(-1)].long().cuda())
 
         coord_mask = Variable(coord_mask.cuda())
         conf_mask  = Variable(conf_mask.cuda().sqrt())
@@ -165,12 +165,12 @@ class RegionLoss(nn.Module):
 
         t3 = time.time()
 
-        loss_x = self.coord_scale * nn.MSELoss(size_average=False)(x*coord_mask, tx*coord_mask)/2.0
-        loss_y = self.coord_scale * nn.MSELoss(size_average=False)(y*coord_mask, ty*coord_mask)/2.0
-        loss_w = self.coord_scale * nn.MSELoss(size_average=False)(w*coord_mask, tw*coord_mask)/2.0
-        loss_h = self.coord_scale * nn.MSELoss(size_average=False)(h*coord_mask, th*coord_mask)/2.0
-        loss_conf = nn.MSELoss(size_average=False)(conf*conf_mask, tconf*conf_mask)/2.0
-        loss_cls = self.class_scale * nn.CrossEntropyLoss(size_average=False)(cls, tcls)
+        loss_x = self.coord_scale * nn.MSELoss(reduction='sum')(x*coord_mask, tx*coord_mask)/2.0
+        loss_y = self.coord_scale * nn.MSELoss(reduction='sum')(y*coord_mask, ty*coord_mask)/2.0
+        loss_w = self.coord_scale * nn.MSELoss(reduction='sum')(w*coord_mask, tw*coord_mask)/2.0
+        loss_h = self.coord_scale * nn.MSELoss(reduction='sum')(h*coord_mask, th*coord_mask)/2.0
+        loss_conf = nn.MSELoss(reduction='sum')(conf*conf_mask, tconf*conf_mask)/2.0
+        loss_cls = self.class_scale * nn.CrossEntropyLoss(reduction='sum')(cls, tcls)
         loss = loss_x + loss_y + loss_w + loss_h + loss_conf + loss_cls
         t4 = time.time()
         if False:
@@ -180,5 +180,5 @@ class RegionLoss(nn.Module):
             print('     build targets : %f' % (t3 - t2))
             print('       create loss : %f' % (t4 - t3))
             print('             total : %f' % (t4 - t0))
-        print('%d: nGT %d, recall %d, proposals %d, loss: x %f, y %f, w %f, h %f, conf %f, cls %f, total %f' % (self.seen, nGT, nCorrect, nProposals, loss_x.data[0], loss_y.data[0], loss_w.data[0], loss_h.data[0], loss_conf.data[0], loss_cls.data[0], loss.data[0]))
+        print('%d: nGT %d, recall %d, proposals %d, loss: x %f, y %f, w %f, h %f, conf %f, cls %f, total %f' % (self.seen, nGT, nCorrect, nProposals, loss_x.item(), loss_y.item(), loss_w.item(), loss_h.item(), loss_conf.item(), loss_cls.item(), loss.item()))
         return loss
